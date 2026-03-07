@@ -1,0 +1,126 @@
+import { NextRequest, NextResponse } from "next/server";
+import { PublicKey } from "@solana/web3.js";
+
+import { submitNormalScore } from "@/server/normalCore";
+import { consumeSubmitReceipt } from "@/server/runsStore";
+import { simulateSeekyRun } from "@/server/replaySim";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+const NO_STORE_HEADERS = {
+  "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+  Pragma: "no-cache",
+  Expires: "0",
+  "Surrogate-Control": "no-store",
+};
+
+function bad(msg: string, status = 400) {
+  return NextResponse.json(
+    { ok: false, error: msg },
+    { status, headers: NO_STORE_HEADERS },
+  );
+}
+
+function assertWallet(walletStr: string): string | null {
+  const w = String(walletStr || "").trim();
+  if (!w) return null;
+  if (w.startsWith("local_") || w === "training") return null;
+
+  try {
+    new PublicKey(w);
+    return w;
+  } catch {
+    return null;
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const body = (await req.json().catch(() => null)) as {
+    wallet?: string;
+    name?: string;
+    score?: number;
+    startedAt?: number; // ignored: server uses receipt.createdAt
+    roundId?: number;
+    receipt?: string;
+    seed?: number;
+    taps?: number[];
+  } | null;
+
+  const wallet = assertWallet(String(body?.wallet || "").trim());
+  if (!wallet) return bad("INVALID_WALLET");
+
+  const receipt = String(body?.receipt || "").trim();
+  const roundId = Math.floor(Number(body?.roundId || 0));
+  const scoreClient = Math.max(0, Math.floor(Number(body?.score || 0)));
+
+  const seedClient = Math.floor(Number(body?.seed || 0)) >>> 0;
+  const tapsClient = Array.isArray(body?.taps)
+    ? body.taps
+        .map((n) => Math.max(0, Math.floor(Number(n))))
+        .filter((n) => Number.isFinite(n))
+    : [];
+
+  console.log(
+    "[normal/submit] wallet=%s receipt=%s roundId=%s score=%s seed=%s tapsLen=%s",
+    wallet,
+    receipt ? receipt.slice(0, 18) + "…" : "null",
+    String(roundId),
+    String(scoreClient),
+    String(seedClient),
+    String(tapsClient.length),
+  );
+
+  if (!receipt) return bad("MISSING_RECEIPT");
+
+  // One-shot receipt validation + burn
+  const c = consumeSubmitReceipt({ id: receipt, wallet, mode: "normal" });
+  console.log("[normal/submit] receiptCheck=%j", c);
+
+  if (!c.ok) return bad(c.error);
+
+  const startedAtServer = c.createdAt;
+  const seedServer = Math.floor(Number(c.seed || 0)) >>> 0;
+
+  if (!seedServer) return bad("MISSING_SERVER_SEED");
+  if (!roundId) return bad("BAD_ROUND");
+  if (!seedClient || tapsClient.length === 0) return bad("MISSING_REPLAY");
+  if (seedClient !== seedServer) return bad("SEED_MISMATCH");
+
+  const sim = simulateSeekyRun({ seed: seedServer, tapsMs: tapsClient });
+  if (!sim.ok) return bad(sim.error);
+
+  const scoreServer = sim.score;
+
+  if (scoreServer !== scoreClient) {
+    console.log(
+      "[normal/submit] SCORE_MISMATCH client=%s server=%s diedAtMs=%s",
+      String(scoreClient),
+      String(scoreServer),
+      String(sim.diedAtMs),
+    );
+
+    return NextResponse.json(
+      { ok: false, error: "SCORE_MISMATCH", expected: scoreServer },
+      { status: 400, headers: NO_STORE_HEADERS },
+    );
+  }
+
+  const res = submitNormalScore({
+    wallet,
+    name: String(body?.name || ""),
+    score: scoreServer,
+    startedAt: startedAtServer,
+    roundId,
+  });
+
+  if (!res.ok) {
+    return NextResponse.json(res, { status: 400, headers: NO_STORE_HEADERS });
+  }
+
+  return NextResponse.json(
+    { ok: true, startedAt: startedAtServer, seed: seedServer },
+    { headers: NO_STORE_HEADERS },
+  );
+}
