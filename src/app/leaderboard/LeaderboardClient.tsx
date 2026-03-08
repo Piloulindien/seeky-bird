@@ -283,6 +283,9 @@ export default function LeaderboardClient() {
     Array<{ name: string; score: number }>
   >([]);
   const [dailyToday, setDailyToday] = useState<string>("");
+  const effectiveDailyDay = useMemo(() => {
+    return urlDay || dailyToday || "";
+  }, [urlDay, dailyToday]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -357,10 +360,14 @@ export default function LeaderboardClient() {
     let alive = true;
 
     const run = async () => {
-      const q = urlDay ? `?day=${encodeURIComponent(urlDay)}` : "";
+      const q = effectiveDailyDay
+        ? `?day=${encodeURIComponent(effectiveDailyDay)}`
+        : "";
+
       const r = await fetch(`/api/daily/status${q}`, {
         cache: "no-store",
       }).catch(() => null);
+
       if (!alive) return;
 
       if (!r || !r.ok) {
@@ -371,6 +378,7 @@ export default function LeaderboardClient() {
       const j = (await r
         .json()
         .catch(() => null)) as DailyStatusResponse | null;
+
       const top3 = Array.isArray(j?.top3) ? j.top3 : [];
       setDailyTop3(
         top3.slice(0, 3).map((x) => ({ name: x.name, score: x.score })),
@@ -378,13 +386,13 @@ export default function LeaderboardClient() {
     };
 
     void run();
-    const t = window.setInterval(run, 2000);
+    const t = window.setInterval(run, 1500);
 
     return () => {
       alive = false;
       window.clearInterval(t);
     };
-  }, [tab, urlDay]);
+  }, [tab, effectiveDailyDay]);
 
   /* ---------------- SuperPrize ---------------- */
 
@@ -676,7 +684,7 @@ export default function LeaderboardClient() {
             <div style={cardHeader}>
               <div style={cardHeaderText}>
                 <div style={{ fontWeight: 900 }}>
-                  Daily · {urlDay ? urlDay : "Today"}
+                  Daily · {effectiveDailyDay || "Today"}
                 </div>
                 <div style={scopeText}>
                   Scope: ranked for <b>that day only</b>.

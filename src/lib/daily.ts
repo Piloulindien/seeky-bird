@@ -50,36 +50,10 @@ export async function fetchDailyStatus(
 /**
  * Submit score for the Daily tournament.
  * IMPORTANT:
- * - Must include the one-shot receipt when the run was PAID.
+ * - Verified submit requires the one-shot receipt,
+ *   the server seed, and the client tap replay.
  * - Pool/entries are accounted for ONLY when /api/play/consume returns used === "paid".
  */
-export async function saveDailyTournamentScore(args: {
-  wallet: string;
-  name: string;
-  score: number;
-  day?: string;
-  startedAt: number;
-  receipt?: string; // ✅ required when paid
-}) {
-  const payload = {
-    ...args,
-    day: args.day ?? getDailyDayForNow(),
-  };
-
-  const r = await fetch("/api/daily/submit", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  }).catch(() => null);
-
-  if (!r) return { ok: false as const, error: "NETWORK" };
-  if (!r.ok) {
-    const j = (await r.json().catch(() => null)) as { error?: string } | null;
-    return { ok: false as const, error: j?.error || "SUBMIT_FAILED" };
-  }
-  return { ok: true as const };
-}
 
 export async function getDailyTournamentTop3(): Promise<
   Array<{ wallet: string; name: string; score: number }>

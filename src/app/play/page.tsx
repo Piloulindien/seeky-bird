@@ -11,6 +11,11 @@ import {
   fetchSuperprizeLeaderboardTop3,
   submitSuperprizeScore,
 } from "../../lib/superprize";
+import {
+  getConnectedWalletPubkey,
+  ensureWalletConnected,
+  type SolanaProvider as BaseSolanaProvider,
+} from "../../lib/wallet";
 
 import { Connection, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
@@ -117,7 +122,9 @@ type BuyIntentRes =
     }
   | { ok: false; error?: string };
 
-type ConfirmRes = { ok: true } | { ok: false; error?: string };
+type ConfirmRes =
+  | { ok: true; receipt: string; seed: number }
+  | { ok: false; error?: string };
 
 type ToastState = null | {
   kind: "no-runs" | "error" | "info";
@@ -131,14 +138,10 @@ type SignedMessageResult =
   | number[]
   | { signature: Uint8Array | number[] };
 
-type SolanaProvider = {
+type PlaySolanaProvider = BaseSolanaProvider & {
   publicKey?: { toBase58: () => string };
   signTransaction?: (tx: Transaction) => Promise<Transaction>;
   signMessage?: (msg: Uint8Array) => Promise<SignedMessageResult>;
-};
-
-type ConnectableProvider = SolanaProvider & {
-  connect?: () => Promise<unknown>;
 };
 
 type NonceRes =
@@ -151,6 +154,119 @@ type NonceRes =
       expiresAt: number;
     }
   | { ok: false; error: string };
+
+type MobileBridgeBuyResponse = {
+  type: "SEEKY_MOBILE_BRIDGE_RESPONSE";
+  id: string;
+  ok: boolean;
+  result?: {
+    wallet?: string;
+    signature?: string;
+    receipt?: string;
+    seed?: number;
+  };
+  error?: string;
+};
+
+function isMobileBridgeAvailable(): boolean {
+  if (typeof window === "undefined") return false;
+  const w = window as unknown as {
+    __SEEKY_MOBILE__?: boolean;
+    ReactNativeWebView?: { postMessage?: (msg: string) => void };
+  };
+
+  return !!(
+    w.__SEEKY_MOBILE__ &&
+    w.ReactNativeWebView &&
+    typeof w.ReactNativeWebView.postMessage === "function"
+  );
+}
+
+function makeBridgeId(): string {
+  return `seeky_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function buyRunViaMobileBridge(
+  mode: "normal" | "daily" | "superprize",
+): Promise<
+  { ok: true; receipt?: string; seed?: number } | { ok: false; error: string }
+> {
+  if (typeof window === "undefined") {
+    return { ok: false, error: "NO_WINDOW" };
+  }
+
+  const w = window as unknown as {
+    ReactNativeWebView?: { postMessage?: (msg: string) => void };
+  };
+
+  const nativeWebView = w.ReactNativeWebView;
+  const postMessageToNative = nativeWebView?.postMessage?.bind(nativeWebView);
+
+  if (!postMessageToNative) {
+    return { ok: false, error: "MOBILE_BRIDGE_UNAVAILABLE" };
+  }
+
+  const id = makeBridgeId();
+
+  return await new Promise((resolve) => {
+    const onMessage = (event: MessageEvent) => {
+      let data: unknown = event.data;
+
+      if (typeof data === "string") {
+        try {
+          data = JSON.parse(data);
+        } catch {
+          return;
+        }
+      }
+
+      if (!data || typeof data !== "object") return;
+
+      const msg = data as Partial<MobileBridgeBuyResponse>;
+      if (msg.type !== "SEEKY_MOBILE_BRIDGE_RESPONSE") return;
+      if (msg.id !== id) return;
+
+      cleanup();
+
+      if (!msg.ok) {
+        resolve({ ok: false, error: msg.error || "BUY_FAILED" });
+        return;
+      }
+
+      resolve({
+        ok: true,
+        receipt: msg.result?.receipt,
+        seed:
+          typeof msg.result?.seed === "number"
+            ? Math.floor(msg.result.seed)
+            : undefined,
+      });
+    };
+
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", onMessage);
+      document.removeEventListener("message", onMessage as EventListener);
+    };
+
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      resolve({ ok: false, error: "MOBILE_BRIDGE_TIMEOUT" });
+    }, 30000);
+
+    window.addEventListener("message", onMessage);
+    document.addEventListener("message", onMessage as EventListener);
+
+    postMessageToNative(
+      JSON.stringify({
+        type: "SEEKY_MOBILE_BRIDGE_REQUEST",
+        id,
+        method: "buyRun",
+        payload: { mode },
+      }),
+    );
+  });
+}
 
 /* =========================
    Utils
@@ -170,16 +286,6 @@ function normalizeSignedMessage(value: unknown): Uint8Array | null {
   }
 
   return null;
-}
-
-function getSolanaProvider(): SolanaProvider | null {
-  if (typeof window === "undefined") return null;
-
-  const w = window as unknown as { solana?: unknown };
-  const p = w.solana;
-  if (!p || typeof p !== "object") return null;
-
-  return p as SolanaProvider;
 }
 
 function utcDayNow(): string {
@@ -215,25 +321,17 @@ function parseModeFromUrl(): GameMode {
     : "normal";
 }
 
-function getConnectedWalletPubkey(): string | null {
-  if (typeof window === "undefined") return null;
-  const provider = getSolanaProvider();
-  const pk = provider?.publicKey?.toBase58?.();
-  return pk && pk.length > 20 ? pk : null;
-}
+function isEmbeddedPlay(): boolean {
+  if (typeof window === "undefined") return false;
 
-async function ensureWalletConnected(): Promise<SolanaProvider | null> {
-  const p = getSolanaProvider() as ConnectableProvider | null;
-  if (!p) return null;
+  const w = window as unknown as { __SEEKY_MOBILE__?: boolean };
+  const sp = new URLSearchParams(window.location.search);
 
-  const alreadyConnected = p.publicKey?.toBase58?.();
-  if (alreadyConnected) return p;
-
-  if (typeof p.connect === "function") {
-    await p.connect().catch(() => null);
-  }
-
-  return p;
+  return (
+    sp.get("embed") === "1" ||
+    sp.get("mobile") === "1" ||
+    w.__SEEKY_MOBILE__ === true
+  );
 }
 
 async function fetchConsumeNonce(wallet: string): Promise<NonceRes> {
@@ -253,7 +351,7 @@ async function signConsumeNonce(
 ): Promise<
   { ok: true; nonce: string; signature: string } | { ok: false; error: string }
 > {
-  const provider = await ensureWalletConnected();
+  const provider = (await ensureWalletConnected()) as PlaySolanaProvider | null;
   const connectedWallet = provider?.publicKey?.toBase58?.();
 
   if (!connectedWallet || connectedWallet !== wallet) {
@@ -285,7 +383,7 @@ async function signConsumeNonce(
 }
 
 async function postConsume(mode: GameMode): Promise<ConsumeRes> {
-  const provider = await ensureWalletConnected();
+  const provider = (await ensureWalletConnected()) as PlaySolanaProvider | null;
   const wallet = provider?.publicKey?.toBase58?.();
   if (!wallet) return { ok: false, error: "NO_WALLET" };
 
@@ -356,13 +454,19 @@ async function postConfirm(args: {
 
 async function buyRunReal(
   mode: GameMode,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; receipt?: string; seed?: number } | { ok: false; error: string }
+> {
   if (typeof window === "undefined") return { ok: false, error: "NO_WINDOW" };
   if (mode !== "normal" && mode !== "daily" && mode !== "superprize") {
     return { ok: false, error: "BAD_MODE" };
   }
 
-  const provider = await ensureWalletConnected();
+  if (isEmbeddedPlay() && isMobileBridgeAvailable()) {
+    return await buyRunViaMobileBridge(mode);
+  }
+
+  const provider = (await ensureWalletConnected()) as PlaySolanaProvider | null;
   if (!provider?.publicKey || !provider?.signTransaction) {
     return { ok: false, error: "NO_WALLET_PROVIDER" };
   }
@@ -390,8 +494,15 @@ async function buyRunReal(
     signature: sig,
   });
 
-  if (!cf.ok) return { ok: false, error: cf.error || "CONFIRM_FAILED" };
-  return { ok: true };
+  if (!cf.ok) {
+    return { ok: false, error: cf.error || "CONFIRM_FAILED" };
+  }
+
+  return {
+    ok: true,
+    receipt: cf.receipt,
+    seed: cf.seed,
+  };
 }
 
 /* =========================
@@ -527,12 +638,14 @@ async function fetchNormalLastDistribution(): Promise<{
 
 export default function PlayPage() {
   const router = useRouter();
+  const embedded = isEmbeddedPlay();
 
   const normalRunStartedAtRef = useRef<number | null>(null);
   const dailyRunStartedAtRef = useRef<number | null>(null);
   const superRunStartedAtRef = useRef<number | null>(null);
 
   const [mode, setMode] = useState<GameMode>(() => parseModeFromUrl());
+  const modeRef = useRef<GameMode>(mode);
   const [session, setSession] = useState(0);
 
   const [toast, setToast] = useState<ToastState>(null);
@@ -592,6 +705,10 @@ export default function PlayPage() {
   const normalTapsRef = useRef<number[]>([]);
   const dailyTapsRef = useRef<number[]>([]);
   const superTapsRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -735,25 +852,43 @@ export default function PlayPage() {
   }, [mode, needPseudo]);
 
   useEffect(() => {
-    normalSeedRef.current = 0;
-    dailySeedRef.current = 0;
-    superSeedRef.current = 0;
-
-    normalTapsRef.current = [];
-    dailyTapsRef.current = [];
-    superTapsRef.current = [];
-
     if (needPseudo) return;
+
+    const hasPendingNormalTicket =
+      !!String(normalReceiptRef.current || "").trim() &&
+      !!Math.floor(Number(normalSeedRef.current || 0));
+
+    const hasPendingDailyTicket =
+      !!String(dailyReceiptRef.current || "").trim() &&
+      !!Math.floor(Number(dailySeedRef.current || 0));
+
+    const hasPendingSuperTicket =
+      !!String(superReceiptRef.current || "").trim() &&
+      !!Math.floor(Number(superSeedRef.current || 0));
+
+    if (!hasPendingNormalTicket) {
+      normalSeedRef.current = 0;
+      normalTapsRef.current = [];
+      normalReceiptRef.current = null;
+    }
+
+    if (!hasPendingDailyTicket) {
+      dailySeedRef.current = 0;
+      dailyTapsRef.current = [];
+      dailyReceiptRef.current = null;
+    }
+
+    if (!hasPendingSuperTicket) {
+      superSeedRef.current = 0;
+      superTapsRef.current = [];
+      superReceiptRef.current = null;
+    }
 
     setToast(null);
     setGameOver(null);
     setTopList([]);
     setRoundCutoff(null);
     setNormalProgress(null);
-
-    normalReceiptRef.current = null;
-    dailyReceiptRef.current = null;
-    superReceiptRef.current = null;
 
     dailyDayRef.current = utcDayNow();
     normalRunStartedAtRef.current = null;
@@ -782,42 +917,51 @@ export default function PlayPage() {
 
       if (effectiveMode !== "training") {
         const key = `${effectiveMode}:${session}`;
+        const alreadyHaveReceipt =
+          (effectiveMode === "normal" &&
+            !!String(normalReceiptRef.current || "").trim() &&
+            !!Math.floor(Number(normalSeedRef.current || 0))) ||
+          (effectiveMode === "daily" &&
+            !!String(dailyReceiptRef.current || "").trim() &&
+            !!Math.floor(Number(dailySeedRef.current || 0))) ||
+          (effectiveMode === "superprize" &&
+            !!String(superReceiptRef.current || "").trim() &&
+            !!Math.floor(Number(superSeedRef.current || 0)));
+
         if (consumedKeyRef.current !== key) {
           consumedKeyRef.current = key;
 
-          if (effectiveMode === "superprize") {
-            const st = await fetchSuperprizeStatus();
-            const ev = st?.event;
-            if (!ev || ev.status !== "live") {
+          if (!alreadyHaveReceipt) {
+            if (effectiveMode === "superprize") {
+              const st = await fetchSuperprizeStatus();
+              const ev = st?.event;
+              if (!ev || ev.status !== "live") {
+                setToast({
+                  kind: "info",
+                  mode: effectiveMode,
+                  message: "Superprize is not active right now.",
+                  canBuy: false,
+                });
+                return;
+              }
+
+              const pool = ev.prizePoolSol ?? 0;
+              superPrizeSolRef.current = pool;
+              setSuperPrizeSol(pool);
+            }
+
+            const pk = getConnectedWalletPubkey();
+            if (!pk) {
               setToast({
                 kind: "info",
                 mode: effectiveMode,
-                message: "Superprize is not active right now.",
                 canBuy: false,
+                message: "Connect wallet to play.",
               });
               return;
             }
 
-            const pool = ev.prizePoolSol ?? 0;
-            superPrizeSolRef.current = pool;
-            setSuperPrizeSol(pool);
-          }
-
-          const pk = getConnectedWalletPubkey();
-          if (!pk) {
-            setToast({
-              kind: "info",
-              mode: effectiveMode,
-              canBuy: false,
-              message: "Connecte Phantom pour jouer.",
-            });
-            return;
-          }
-
-          const cr = await postConsume(effectiveMode);
-
-          if (!cr.ok) {
-            if (cr.error === "NO_RUNS_LEFT") {
+            if (isEmbeddedPlay()) {
               setToast({
                 kind: "no-runs",
                 mode: effectiveMode,
@@ -834,65 +978,49 @@ export default function PlayPage() {
               return;
             }
 
-            if (
-              cr.error === "NO_WALLET" ||
-              cr.error === "WALLET_NO_SIGN_MESSAGE" ||
-              cr.error === "SIGN_FAILED" ||
-              cr.error === "NONCE_FAILED"
-            ) {
+            const cr = await postConsume(effectiveMode);
+
+            if (!cr.ok) {
+              if (cr.error === "NO_RUNS_LEFT") {
+                setToast({
+                  kind: "no-runs",
+                  mode: effectiveMode,
+                  canBuy: true,
+                  message:
+                    effectiveMode === "daily"
+                      ? "No daily runs available."
+                      : effectiveMode === "normal"
+                        ? "No normal runs available."
+                        : effectiveMode === "superprize"
+                          ? "No Superprize runs available."
+                          : "No runs available.",
+                });
+                return;
+              }
+
+              if (
+                cr.error === "NO_WALLET" ||
+                cr.error === "WALLET_NO_SIGN_MESSAGE" ||
+                cr.error === "SIGN_FAILED" ||
+                cr.error === "NONCE_FAILED"
+              ) {
+                setToast({
+                  kind: "info",
+                  mode: effectiveMode,
+                  canBuy: false,
+                  message: "Wallet signature required to play.",
+                });
+                return;
+              }
+
               setToast({
-                kind: "info",
+                kind: "error",
                 mode: effectiveMode,
                 canBuy: false,
-                message: "Wallet signature required to play.",
+                message: `Consume failed: ${cr.error}`,
               });
               return;
             }
-
-            setToast({
-              kind: "error",
-              mode: effectiveMode,
-              canBuy: false,
-              message: `Consume failed: ${cr.error}`,
-            });
-            return;
-          }
-
-          const receipt = String(cr.receipt || "").trim();
-          const seed = Math.floor(Number(cr.seed ?? 0));
-
-          if (!seed) {
-            setToast({
-              kind: "error",
-              mode: effectiveMode,
-              message: "Ticket error (missing seed).",
-              canBuy: false,
-            });
-            return;
-          }
-
-          if (!receipt) {
-            setToast({
-              kind: "error",
-              mode: effectiveMode,
-              message: "Ticket error (missing receipt).",
-              canBuy: false,
-            });
-            return;
-          }
-
-          if (effectiveMode === "normal") {
-            normalSeedRef.current = seed;
-            normalTapsRef.current = [];
-            normalReceiptRef.current = receipt;
-          } else if (effectiveMode === "daily") {
-            dailySeedRef.current = seed;
-            dailyTapsRef.current = [];
-            dailyReceiptRef.current = receipt;
-          } else if (effectiveMode === "superprize") {
-            superSeedRef.current = seed;
-            superTapsRef.current = [];
-            superReceiptRef.current = receipt;
           }
         }
       }
@@ -985,50 +1113,101 @@ export default function PlayPage() {
       game = createGame(
         "game-container",
         effectiveMode,
-        async (score: number, m: GameMode) => {
+        async (score: number) => {
           if (cancelled) return;
 
+          const finalMode = modeRef.current;
+
           setGameOver({ score });
-          if (m !== "training") fireRunConfetti(1200);
+          if (finalMode !== "training") fireRunConfetti(1200);
 
           const name = pseudoRef.current.trim();
           const pk = getConnectedWalletPubkey();
-          if (!pk && m !== "training") {
+
+          if (!pk && finalMode !== "training") {
             setToast({
               kind: "error",
-              mode: m,
+              mode: finalMode,
               message: "Submit blocked: wallet not connected.",
             });
             return;
           }
+
           const walletId = pk || "training";
 
-          if (m === "normal") {
+          if (finalMode === "normal") {
             const rid = runRoundIdRef.current;
             const startedAt = normalRunStartedAtRef.current ?? Date.now();
-
             const receipt = String(normalReceiptRef.current || "").trim();
-            normalReceiptRef.current = null;
+            const seed = Math.floor(Number(normalSeedRef.current || 0));
+            const taps = [...normalTapsRef.current];
 
-            if (name && rid && receipt) {
-              const res = await submitNormalScore({
-                wallet: walletId,
-                name,
-                score,
-                startedAt,
-                roundId: rid,
-                receipt,
-                seed: normalSeedRef.current,
-                taps: normalTapsRef.current,
+            if (!name) {
+              setToast({
+                kind: "error",
+                mode: "normal",
+                message: "Normal submit blocked: missing pseudo.",
               });
-              if (!res.ok) {
-                setToast({
-                  kind: "error",
-                  mode: "normal",
-                  message: `Normal submit failed: ${res.error}`,
-                });
-              }
+              return;
             }
+
+            if (!rid) {
+              setToast({
+                kind: "error",
+                mode: "normal",
+                message: "Normal submit blocked: missing round.",
+              });
+              return;
+            }
+
+            if (!receipt) {
+              setToast({
+                kind: "error",
+                mode: "normal",
+                message: "Normal submit blocked: missing receipt.",
+              });
+              return;
+            }
+
+            if (!seed) {
+              setToast({
+                kind: "error",
+                mode: "normal",
+                message: "Normal submit blocked: missing seed.",
+              });
+              return;
+            }
+
+            if (!taps.length) {
+              setToast({
+                kind: "error",
+                mode: "normal",
+                message: "Normal submit blocked: missing taps replay.",
+              });
+              return;
+            }
+
+            const res = await submitNormalScore({
+              wallet: walletId,
+              name,
+              score,
+              startedAt,
+              roundId: rid,
+              receipt,
+              seed,
+              taps,
+            });
+
+            if (!res.ok) {
+              setToast({
+                kind: "error",
+                mode: "normal",
+                message: `Normal submit failed: ${res.error}`,
+              });
+              return;
+            }
+
+            normalReceiptRef.current = null;
 
             const st = await fetchNormalStatus();
             if (st) {
@@ -1066,48 +1245,103 @@ export default function PlayPage() {
                 payoutJustTriggered,
               });
 
-              normalTop10Ref.current = await fetchTop10ForRound(st.round.id);
+              const nextTop = await fetchTop10ForRound(st.round.id);
+              normalTop10Ref.current = nextTop;
+              setTopList(nextTop);
+
+              const cutoff = nextTop.length >= 10 ? nextTop[9].score : null;
+              setRoundCutoff(cutoff);
             }
+
+            return;
           }
 
-          if (m === "daily") {
+          if (finalMode === "daily") {
             const day = dailyDayRef.current || utcDayNow();
             const startedAt = dailyRunStartedAtRef.current ?? Date.now();
-
             const receipt = String(dailyReceiptRef.current || "").trim();
-            dailyReceiptRef.current = null;
+            const seed = Math.floor(Number(dailySeedRef.current || 0));
+            const taps = [...dailyTapsRef.current];
 
-            if (name && receipt) {
-              const res = await submitDailyScore({
-                wallet: walletId,
-                name,
-                score,
-                startedAt,
-                day,
-                receipt,
-                seed: dailySeedRef.current,
-                taps: dailyTapsRef.current,
+            if (!name) {
+              setToast({
+                kind: "error",
+                mode: "daily",
+                message: "Daily submit blocked: missing pseudo.",
               });
-              if (!res.ok) {
-                setToast({
-                  kind: "error",
-                  mode: "daily",
-                  message: `Daily submit failed: ${res.error}`,
-                });
-              }
+              return;
             }
+
+            if (!receipt) {
+              setToast({
+                kind: "error",
+                mode: "daily",
+                message: "Daily submit blocked: missing receipt.",
+              });
+              return;
+            }
+
+            if (!seed) {
+              setToast({
+                kind: "error",
+                mode: "daily",
+                message: "Daily submit blocked: missing seed.",
+              });
+              return;
+            }
+
+            if (!taps.length) {
+              setToast({
+                kind: "error",
+                mode: "daily",
+                message: "Daily submit blocked: missing taps replay.",
+              });
+              return;
+            }
+
+            const res = await submitDailyScore({
+              wallet: walletId,
+              name,
+              score,
+              startedAt,
+              day,
+              receipt,
+              seed,
+              taps,
+            });
+
+            if (!res.ok) {
+              setToast({
+                kind: "error",
+                mode: "daily",
+                message: `Daily submit failed: ${res.error}`,
+              });
+              return;
+            }
+
+            dailyReceiptRef.current = null;
+            fireRunConfetti(1500);
 
             const st = await fetchDailyStatus(day);
             if (st) {
               dailyPoolRef.current = Number(st.day.poolSol || 0);
               setDailyPoolUi(dailyPoolRef.current);
-              dailyTop3Ref.current = (st.top3 || [])
+
+              const nextTop = (st.top3 || [])
                 .slice(0, 3)
                 .map((x) => ({ name: x.name, score: x.score }));
+
+              dailyTop3Ref.current = nextTop;
+              setTopList(nextTop);
+
+              const cutoff = nextTop.length >= 3 ? nextTop[2].score : null;
+              setRoundCutoff(cutoff);
             }
+
+            return;
           }
 
-          if (m === "superprize") {
+          if (finalMode === "superprize") {
             const startedAt = superRunStartedAtRef.current ?? Date.now();
 
             const receipt = String(superReceiptRef.current || "").trim();
@@ -1131,6 +1365,7 @@ export default function PlayPage() {
               seed: superSeedRef.current,
               taps: superTapsRef.current,
             });
+
             if (!res.ok) {
               setToast({
                 kind: "error",
@@ -1153,30 +1388,21 @@ export default function PlayPage() {
             const mapped = (top3 || [])
               .slice(0, 3)
               .map((x) => ({ name: x.name, score: x.score }));
+
             superTop3Ref.current = mapped;
             setSuperTop3Ui(mapped);
+            setTopList(mapped);
+
+            const cutoff = mapped.length >= 3 ? mapped[2].score : null;
+            setRoundCutoff(cutoff);
+
+            return;
           }
-
-          let top: TopRow[] = [];
-          if (m === "daily") top = dailyTop3Ref.current;
-          else if (m === "normal") top = normalTop10Ref.current;
-          else if (m === "superprize") top = superTop3Ref.current;
-
-          setTopList(top);
-
-          const cutoff =
-            m === "superprize" || m === "daily"
-              ? top.length >= 3
-                ? top[2].score
-                : null
-              : top.length >= 10
-                ? top[9].score
-                : null;
-
-          setRoundCutoff(cutoff);
         },
         hud,
         async (m: GameMode) => {
+          modeRef.current = m;
+
           if (m === "normal") {
             normalRunStartedAtRef.current = Date.now();
             const st = await fetchNormalStatus();
@@ -1224,8 +1450,8 @@ export default function PlayPage() {
   }, [mode, session, needPseudo]);
 
   return (
-    <main style={wrap}>
-      <div id="game-container" style={gameBox} />
+    <main style={embedded ? wrapEmbed : wrap}>
+      <div id="game-container" style={embedded ? gameBoxEmbed : gameBox} />
 
       {showRunConfetti && (
         <div style={confettiLayer}>
@@ -1241,7 +1467,9 @@ export default function PlayPage() {
                 borderRadius: 3,
                 background: "rgba(255,255,255,0.9)",
                 transform: `rotate(${(i * 19) % 180}deg)`,
-                animation: `confettiFall 900ms ease-out ${(i % 12) * 35}ms forwards`,
+                animation: `confettiFall 900ms ease-out ${
+                  (i % 12) * 35
+                }ms forwards`,
               }}
             />
           ))}
@@ -1253,7 +1481,7 @@ export default function PlayPage() {
           <div style={toastModal}>
             <div style={modalText}>{toast.message}</div>
 
-            {toast.kind === "info" && (
+            {toast.kind === "info" && !embedded && (
               <button
                 style={btnFull}
                 onClick={async () => {
@@ -1263,7 +1491,7 @@ export default function PlayPage() {
                     setToast({
                       kind: "error",
                       mode: toast.mode,
-                      message: "Connexion Phantom refusée ou indisponible.",
+                      message: "Wallet connection refused or unavailable.",
                     });
                     return;
                   }
@@ -1272,6 +1500,12 @@ export default function PlayPage() {
                 }}
               >
                 Connect wallet
+              </button>
+            )}
+
+            {toast.kind === "info" && embedded && (
+              <button style={btnFull} onClick={() => router.push("/")}>
+                Back
               </button>
             )}
 
@@ -1287,17 +1521,76 @@ export default function PlayPage() {
                       mode: toast.mode,
                       message:
                         res.error === "NO_WALLET_PROVIDER"
-                          ? "No Solana wallet detected. Open with a wallet (Phantom / Solana Mobile)."
+                          ? "No mobile wallet available."
                           : `Buy failed: ${res.error}`,
                     });
                     return;
                   }
 
+                  if (toast.mode === "normal") {
+                    const receipt = String(res.receipt || "").trim();
+                    const seed = Math.floor(Number(res.seed ?? 0));
+
+                    if (!receipt || !seed) {
+                      setToast({
+                        kind: "error",
+                        mode: toast.mode,
+                        message:
+                          "Buy succeeded but no playable ticket was returned.",
+                      });
+                      return;
+                    }
+
+                    normalReceiptRef.current = receipt;
+                    normalSeedRef.current = seed;
+                    normalTapsRef.current = [];
+                  }
+
+                  if (toast.mode === "daily") {
+                    const receipt = String(res.receipt || "").trim();
+                    const seed = Math.floor(Number(res.seed ?? 0));
+
+                    if (!receipt || !seed) {
+                      setToast({
+                        kind: "error",
+                        mode: toast.mode,
+                        message:
+                          "Buy succeeded but no playable ticket was returned.",
+                      });
+                      return;
+                    }
+
+                    dailyReceiptRef.current = receipt;
+                    dailySeedRef.current = seed;
+                    dailyTapsRef.current = [];
+                  }
+
+                  if (toast.mode === "superprize") {
+                    const receipt = String(res.receipt || "").trim();
+                    const seed = Math.floor(Number(res.seed ?? 0));
+
+                    if (!receipt || !seed) {
+                      setToast({
+                        kind: "error",
+                        mode: toast.mode,
+                        message:
+                          "Buy succeeded but no playable ticket was returned.",
+                      });
+                      return;
+                    }
+
+                    superReceiptRef.current = receipt;
+                    superSeedRef.current = seed;
+                    superTapsRef.current = [];
+                  }
+
+                  consumedKeyRef.current = `${toast.mode}:${session + 1}`;
                   setToast(null);
+                  setGameOver(null);
                   setSession((s) => s + 1);
                 }}
               >
-                Buy 1 run ({toast.mode})
+                Buy & Play ({toast.mode})
               </button>
             )}
 
@@ -1711,4 +2004,28 @@ const confettiLayer: React.CSSProperties = {
   pointerEvents: "none",
   overflow: "hidden",
   zIndex: 99998,
+};
+
+const wrapEmbed: React.CSSProperties = {
+  minHeight: "100dvh",
+  width: "100vw",
+  height: "100dvh",
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+  background: "#020617",
+  padding: 0,
+  margin: 0,
+  overflow: "hidden",
+};
+
+const gameBoxEmbed: React.CSSProperties = {
+  width: "100vw",
+  height: "100dvh",
+  maxWidth: "100vw",
+  maxHeight: "100dvh",
+  borderRadius: 0,
+  overflow: "hidden",
+  boxShadow: "none",
+  background: "#000",
 };

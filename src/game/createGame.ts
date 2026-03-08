@@ -251,10 +251,10 @@ export function createGame(
       const c = top[2]?.score;
 
       el.textContent =
-        `Top3:\n` +
-        `1. ${typeof a === "number" ? a : "—"}\n` +
-        `2. ${typeof b === "number" ? b : "—"}\n` +
-        `3. ${typeof c === "number" ? c : "—"}`;
+        `Top3\n` +
+        `#1 ${typeof a === "number" ? a : "—"}\n` +
+        `#2 ${typeof b === "number" ? b : "—"}\n` +
+        `#3 ${typeof c === "number" ? c : "—"}`;
 
       return;
     }
@@ -323,48 +323,52 @@ export function createGame(
 
     hudEl = document.createElement("div");
     hudEl.style.position = "absolute";
-    hudEl.style.right = "10px";
-    hudEl.style.top = "10px";
+    hudEl.style.right = "8px";
+    hudEl.style.top = "56px";
     hudEl.style.zIndex = "50";
     hudEl.style.pointerEvents = "none";
-    hudEl.style.padding = "10px 12px";
-    hudEl.style.borderRadius = "14px";
-    hudEl.style.border = "1px solid rgba(255,255,255,0.14)";
-    hudEl.style.background = "rgba(0,0,0,0.38)";
+    hudEl.style.padding = "8px 10px";
+    hudEl.style.borderRadius = "12px";
+    hudEl.style.border = "1px solid rgba(255,255,255,0.10)";
+    hudEl.style.background = "rgba(5, 10, 22, 0.72)";
     hudEl.style.color = "white";
     hudEl.style.fontFamily =
       "system-ui, -apple-system, Segoe UI, Roboto, Arial";
-    hudEl.style.fontSize = "12px";
+    hudEl.style.fontSize = "11px";
     hudEl.style.fontWeight = "700";
-    hudEl.style.backdropFilter = "blur(6px)";
+    hudEl.style.backdropFilter = "blur(8px)";
     // @ts-expect-error safari
-    hudEl.style.webkitBackdropFilter = "blur(6px)";
+    hudEl.style.webkitBackdropFilter = "blur(8px)";
     hudEl.style.textAlign = "right";
-    hudEl.style.lineHeight = "1.2";
+    hudEl.style.lineHeight = "1.25";
+    hudEl.style.minWidth = "120px";
+    hudEl.style.maxWidth = "42vw";
+    hudEl.style.boxShadow = "0 6px 18px rgba(0,0,0,0.28)";
 
     titleLine = document.createElement("div");
-    titleLine.style.fontSize = "18px";
+    titleLine.style.fontSize = "14px";
     titleLine.style.fontWeight = "900";
-    titleLine.style.marginBottom = "6px";
+    titleLine.style.marginBottom = "4px";
 
     roundLine = document.createElement("div");
-    roundLine.style.marginTop = "2px";
-    roundLine.style.opacity = "0.9";
+    roundLine.style.marginTop = "1px";
+    roundLine.style.opacity = "0.82";
 
     runsLine = document.createElement("div");
-    runsLine.style.marginTop = "4px";
+    runsLine.style.marginTop = "3px";
     runsLine.style.fontWeight = "800";
-    runsLine.style.opacity = "0.95";
+    runsLine.style.opacity = "0.9";
 
     poolLine = document.createElement("div");
 
     rankLine = document.createElement("div");
-    rankLine.style.marginTop = "4px";
+    rankLine.style.marginTop = "3px";
     rankLine.style.fontWeight = "800";
 
     deltaLine = document.createElement("div");
-    deltaLine.style.marginTop = "6px";
-    deltaLine.style.fontWeight = "800";
+    deltaLine.style.marginTop = "4px";
+    deltaLine.style.fontWeight = "700";
+    deltaLine.style.fontSize = "10px";
 
     hudEl.appendChild(titleLine);
     hudEl.appendChild(roundLine);
@@ -397,11 +401,17 @@ export function createGame(
   const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,
     parent: containerId,
-    width: 390,
-    height: 720,
+    width: window.innerWidth,
+    height: window.innerHeight,
     scene: [scene],
-    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+    scale: {
+      mode: Phaser.Scale.RESIZE,
+      autoCenter: Phaser.Scale.CENTER_BOTH,
+      width: "100%",
+      height: "100%",
+    },
     render: { roundPixels: false },
+    backgroundColor: "#08142c",
     fps: { target: 60, forceSetTimeOut: false },
   };
 

@@ -36,12 +36,20 @@ function assertWallet(walletStr: string): string | null {
   }
 }
 
+function utcDayNow(): string {
+  const d = new Date();
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as {
     wallet?: string;
     name?: string;
     score?: number;
-    startedAt?: number; // ignored: server uses receipt.createdAt
+    startedAt?: number;
     day?: string;
     receipt?: string;
     seed?: number;
@@ -60,22 +68,32 @@ export async function POST(req: NextRequest) {
         .filter((n) => Number.isFinite(n))
     : [];
 
+  const day =
+    body?.day && /^\d{4}-\d{2}-\d{2}$/.test(body.day) ? body.day : utcDayNow();
+
   if (!receipt) return bad("MISSING_RECEIPT");
 
   const c = consumeSubmitReceipt({ id: receipt, wallet, mode: "daily" });
-  if (!c.ok) return bad(c.error);
+  if (!c.ok) {
+    return bad(c.error, 400);
+  }
 
   const startedAtServer = c.createdAt;
   const seedServer = Math.floor(Number(c.seed || 0)) >>> 0;
 
   if (!seedServer) return bad("MISSING_SERVER_SEED");
-  if (!seedClient || tapsClient.length === 0) return bad("MISSING_REPLAY");
-  if (seedClient !== seedServer) return bad("SEED_MISMATCH");
+  if (!seedClient || tapsClient.length === 0) {
+    return bad("MISSING_REPLAY", 400);
+  }
+  if (seedClient !== seedServer) {
+    return bad("SEED_MISMATCH", 400);
+  }
 
   const sim = simulateSeekyRun({ seed: seedServer, tapsMs: tapsClient });
   if (!sim.ok) return bad(sim.error);
 
   const scoreServer = sim.score;
+
   if (scoreServer !== scoreClient) {
     return NextResponse.json(
       { ok: false, error: "SCORE_MISMATCH", expected: scoreServer },
@@ -88,7 +106,7 @@ export async function POST(req: NextRequest) {
     name: String(body?.name || ""),
     score: scoreServer,
     startedAt: startedAtServer,
-    day: body?.day ? String(body.day) : undefined,
+    day,
   });
 
   if (!res.ok) {

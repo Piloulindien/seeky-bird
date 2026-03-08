@@ -3,8 +3,9 @@ import {
   Connection,
   PublicKey,
   SystemProgram,
-  Transaction,
   TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
 } from "@solana/web3.js";
 import { ECONOMY } from "@/lib/economy";
 import type { Mode } from "@/server/runsStore";
@@ -98,24 +99,24 @@ export async function POST(req: NextRequest) {
   const { blockhash, lastValidBlockHeight } =
     await connection.getLatestBlockhash("confirmed");
 
-  const tx = new Transaction({
-    feePayer: buyer,
-    recentBlockhash: blockhash,
-  });
-
-  tx.add(
+  const instructions = [
     SystemProgram.transfer({
       fromPubkey: buyer,
       toPubkey: treasury,
       lamports,
     }),
-  );
+    memoIx(memo),
+  ];
 
-  tx.add(memoIx(memo));
+  const messageV0 = new TransactionMessage({
+    payerKey: buyer,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message();
 
-  const txB64 = tx
-    .serialize({ requireAllSignatures: false })
-    .toString("base64");
+  const tx = new VersionedTransaction(messageV0);
+
+  const txB64 = Buffer.from(tx.serialize()).toString("base64");
 
   return NextResponse.json(
     {

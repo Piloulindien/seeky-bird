@@ -3,9 +3,17 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import { ECONOMY } from "@/lib/economy";
 import type { Mode } from "@/server/runsStore";
-import { consumeRunPaymentIntent } from "@/server/runsStore";
+import {
+  consumeRunPaymentIntent,
+  consumeRunWithOptionalReceipt,
+  ensureDailyGuaranteedRun,
+  getRunsForWallet,
+  logPaidConsume,
+} from "@/server/runsStore";
 import { creditPaidRunFromSignature } from "@/server/runsPayments";
 import { treasuryPubkey } from "@/server/solana";
+import { recordNormalEntry } from "@/server/normalCore";
+import { recordDailyEntry } from "@/server/daily";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -116,6 +124,7 @@ export async function POST(req: NextRequest) {
   const expectedMemo = `seeky:buy:${mode}:${reference}`;
 
   const connection = new Connection(rpc, "confirmed");
+
   const parsed = await connection.getParsedTransaction(signature, {
     maxSupportedTransactionVersion: 0,
     commitment: "confirmed",
@@ -171,9 +180,7 @@ export async function POST(req: NextRequest) {
     mode,
   });
 
-  if (!intent.ok) {
-    return bad(intent.error);
-  }
+  if (!intent.ok) return bad(intent.error);
 
   if (intent.lamports !== expectedLamports) {
     return bad("BAD_REFERENCE_AMOUNT");
@@ -188,5 +195,31 @@ export async function POST(req: NextRequest) {
 
   if (!credited.ok) return bad(credited.error);
 
-  return NextResponse.json({ ok: true }, { headers: NO_STORE_HEADERS });
+  /**
+   * Signature unique : on consomme immédiatement la run payée
+   */
+
+  ensureDailyGuaranteedRun(walletStr);
+
+  const consumed = consumeRunWithOptionalReceipt(walletStr, mode);
+  if (!consumed) return bad("AUTO_CONSUME_FAILED", 500);
+
+  if (consumed.used === "paid") {
+    logPaidConsume(walletStr, mode);
+
+    if (mode === "normal") recordNormalEntry();
+    if (mode === "daily") recordDailyEntry();
+  }
+
+  const remaining = getRunsForWallet(walletStr);
+
+  return NextResponse.json(
+    {
+      ok: true,
+      receipt: consumed.receipt,
+      seed: consumed.seed,
+      remaining,
+    },
+    { headers: NO_STORE_HEADERS },
+  );
 }

@@ -116,11 +116,9 @@ export async function fetchSuperprizeEvent(eventId: string): Promise<{
   };
 }
 
-export async function fetchSuperprizeLeaderboardTop3(): Promise<
-  Array<{ name: string; score: number }>
-> {
+export async function fetchSuperprizeLeaderboardTop3(): Promise<TopRow[]> {
   const { top } = await fetchSuperprizeLeaderboard();
-  return (top ?? []).slice(0, 3).map((r) => ({ name: r.name, score: r.score }));
+  return (top ?? []).slice(0, 3);
 }
 
 export type SuperprizeSubmitArgs = {

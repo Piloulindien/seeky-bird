@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
     wallet?: string;
     name?: string;
     score?: number;
-    startedAt?: number; // ignored: server uses receipt.createdAt
+    startedAt?: number;
     roundId?: number;
     receipt?: string;
     seed?: number;
@@ -62,29 +62,16 @@ export async function POST(req: NextRequest) {
         .filter((n) => Number.isFinite(n))
     : [];
 
-  console.log(
-    "[normal/submit] wallet=%s receipt=%s roundId=%s score=%s seed=%s tapsLen=%s",
-    wallet,
-    receipt ? receipt.slice(0, 18) + "…" : "null",
-    String(roundId),
-    String(scoreClient),
-    String(seedClient),
-    String(tapsClient.length),
-  );
-
   if (!receipt) return bad("MISSING_RECEIPT");
+  if (!roundId) return bad("BAD_ROUND");
 
-  // One-shot receipt validation + burn
   const c = consumeSubmitReceipt({ id: receipt, wallet, mode: "normal" });
-  console.log("[normal/submit] receiptCheck=%j", c);
-
   if (!c.ok) return bad(c.error);
 
   const startedAtServer = c.createdAt;
   const seedServer = Math.floor(Number(c.seed || 0)) >>> 0;
 
   if (!seedServer) return bad("MISSING_SERVER_SEED");
-  if (!roundId) return bad("BAD_ROUND");
   if (!seedClient || tapsClient.length === 0) return bad("MISSING_REPLAY");
   if (seedClient !== seedServer) return bad("SEED_MISMATCH");
 
@@ -94,13 +81,6 @@ export async function POST(req: NextRequest) {
   const scoreServer = sim.score;
 
   if (scoreServer !== scoreClient) {
-    console.log(
-      "[normal/submit] SCORE_MISMATCH client=%s server=%s diedAtMs=%s",
-      String(scoreClient),
-      String(scoreServer),
-      String(sim.diedAtMs),
-    );
-
     return NextResponse.json(
       { ok: false, error: "SCORE_MISMATCH", expected: scoreServer },
       { status: 400, headers: NO_STORE_HEADERS },

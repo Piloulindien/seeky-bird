@@ -277,7 +277,8 @@ export class SeekyScene extends Phaser.Scene {
     }
 
     // Score
-    const scoreY = this.mode === "daily" ? 56 : 16;
+    const scoreY =
+      this.mode === "daily" || this.mode === "superprize" ? 56 : 16;
 
     this.scoreText = this.add.text(16, scoreY, `Score: ${this.score}`, {
       fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
