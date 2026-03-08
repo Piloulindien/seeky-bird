@@ -1,177 +1,118 @@
 # Seeky Bird
 
-Seeky Bird is a competitive on-chain arcade game built on **Solana** where players compete for real **SOL rewards**.
+**Seeky Bird** is a mobile-first skill-based arcade game built for the **Solana Mobile Hackathon**.
 
-Players pay small entry fees to play runs. Scores are verified server-side and the best players win prizes from pooled rewards.
+Players compete in short Flappy-Bird style runs.
+Each run can be free or paid, and paid runs contribute to a **shared prize pool** distributed to the best players.
 
-The project combines **classic arcade gameplay** with **provably fair scoring and Solana payments**.
-
----
-
-# 🎮 Game Modes
-
-### Normal Mode
-
-Players enter a shared reward pool.
-
-* Each paid run contributes to the pool
-* When the pool reaches a threshold, the **Top 10 players win**
-* Payouts are automatically distributed
-
-### Daily Challenge
-
-A daily competition where players try to reach the highest score.
-
-* One leaderboard per day
-* Top players win the daily pool
-* Scores are replay-verified
-
-### SuperPrize Events
-
-Large tournament-style competitions.
-
-* Fixed prize pools
-* Limited entry
-* **Top 3 players win**
+The game runs inside a **Solana Mobile WebView**, allowing direct wallet interaction from the device.
 
 ---
 
-# ⚙️ How It Works
+## Gameplay
 
-1. Player connects a **Solana wallet**
-2. Player buys a run
-3. Game generates a **deterministic seed**
-4. Player gameplay is recorded (tap timestamps)
-5. Server re-simulates the run
-6. Score is validated
-7. Leaderboards update
-8. Rewards are distributed
+Seeky Bird is simple to play but difficult to master.
 
-This prevents cheating because **scores are replayed server-side**.
+* Tap to keep the bird flying
+* Avoid the pipes
+* Each pipe passed = **+1 score**
+* The best scores enter the **leaderboard**
 
----
+Players can participate in three modes:
 
-# 🔐 Security
+### Normal mode
 
-The system includes several protections:
+* Paid runs contribute to a **round-based pool**
+* Top 10 players share the reward
 
-* Signed wallet messages
-* One-time receipts for runs
-* Deterministic replay verification
-* Server-side score simulation
-* Leaderboard validation
-* Admin payout controls
+### Daily mode
 
-Runs cannot be reused and scores cannot be forged.
+* A daily leaderboard
+* The best scores compete for the daily pool
+
+### SuperPrize mode
+
+* Special high-stakes pool
+* Top 3 players win
 
 ---
 
-# 🧠 Tech Stack
+## Solana Integration
 
-* **Next.js 16**
-* **TypeScript**
-* **Phaser.js** (game engine)
+Seeky Bird integrates several Solana features:
+
+* **Wallet connection via Solana Mobile Wallet Adapter**
+* **On-chain payment for runs**
+* **Transaction signature verification**
+* **Deterministic gameplay seed**
+* **Server-verified leaderboard submission**
+
+Runs are purchased using a transaction signed directly from the mobile wallet.
+
+---
+
+## Tech Stack
+
+* **Phaser** — game engine
+* **Next.js** — web + API backend
+* **React Native** — mobile wrapper
 * **Solana Web3.js**
-* **SQLite (Better-SQLite3)**
-
-The game runs fully in the browser and interacts with Solana wallets for payments.
+* **Solana Mobile Wallet Adapter**
 
 ---
 
-# 📱 Solana Mobile
-
-Seeky Bird is designed to run inside the **Solana Mobile dApp ecosystem**.
-
-Wallet interactions use:
-
-* `signTransaction`
-* `signMessage`
-
-This makes the game compatible with mobile Solana wallets.
-
----
-
-# 🏗 Project Structure
+## Project Structure
 
 ```
-src
- ├ app
- │ ├ api
- │ │ ├ normal
- │ │ ├ daily
- │ │ └ superprize
- │ ├ play
- │ ├ leaderboard
- │ └ rewards
- ├ game
- │ ├ createGame.ts
- │ └ scene.ts
- ├ server
- │ ├ runsStore.ts
- │ ├ normalCore.ts
- │ ├ daily.ts
- │ └ superprize.ts
- └ lib
+seeky-bird/
+ ├── src/game        # Phaser gameplay
+ ├── src/server      # backend logic
+ ├── src/app         # Next.js routes
+ └── api             # leaderboard and runs API
+
+seeky-bird-mobile/
+ └── React Native wrapper embedding the game
 ```
 
 ---
 
-# 🚀 Running the Project
+## Running the project
 
-Install dependencies:
+### Web server
 
-```
+```bash
 npm install
-```
-
-Start development server:
-
-```
 npm run dev
 ```
 
-Build production:
+Server runs on:
 
 ```
-npm run build
-npm run start
+http://localhost:3000
+```
+
+### Mobile app
+
+```
+cd seeky-bird-mobile
+npm install
+npm run android
 ```
 
 ---
 
-# 🔑 Environment Variables
+## Hackathon Focus
 
-Create `.env.local` using `.env.example`.
+This project explores a new type of **skill-based on-chain arcade experience**:
 
-Important variables include:
+* fast gameplay
+* transparent rewards
+* mobile-native wallet interaction
 
-```
-SOLANA_RPC_URL
-NEXT_PUBLIC_SOLANA_RPC_URL
-TREASURY_SECRET_KEY_B58
-TREASURY_PUBKEY
-PAYOUT_SECRET_KEY_B58
-PAYOUT_PUBKEY
-```
-
-These wallets handle game payments and reward distribution.
+The goal is to demonstrate how **Solana Mobile can enable competitive Web3 games that feel like traditional mobile games**.
 
 ---
 
-# 🏆 Hackathon Submission
-
-Seeky Bird demonstrates how **arcade games can integrate Solana payments and trustless score verification**.
-
-Key ideas:
-
-* Competitive gameplay
-* Real token rewards
-* Secure replay-verified scoring
-* Solana wallet payments
-* Mobile compatibility
-
----
-
-# 👤 Author
+## Author
 
 Pierre-Louis Le Roux
